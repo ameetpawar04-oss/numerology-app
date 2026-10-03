@@ -1,0 +1,70 @@
+name: Build APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Test the number engine and build the app
+        id: build
+        run: |
+          set -o pipefail
+          gradle :core:test :app:assembleDebug --stacktrace 2>&1 | tee build.log
+
+      - name: Save a short build report
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/report
+          {
+            echo "run: ${{ github.run_number }}"
+            echo "commit: ${{ github.sha }}"
+            echo "result: ${{ steps.build.outcome }}"
+            echo "---- errors ----"
+            grep -E "^e: |^w: .*deprecat|error:|FAILED|What went wrong|Could not|AAPT|Unresolved|> Task .* FAILED|Tests? .*FAILED|AssertionError|expected:" build.log | head -200 || true
+            echo "---- last 80 lines ----"
+            tail -80 build.log || true
+          } > /tmp/report/build-report.txt
+          cd /tmp/report
+          git init -q -b build-log
+          git add build-report.txt
+          git -c user.name="github-actions" -c user.email="github-actions@github.com" commit -q -m "Build report ${{ github.run_number }}"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" build-log
+
+      - name: Publish the APK as a download
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk amiet-ppawar-numerology.apk
+          gh release create "build-${{ github.run_number }}" amiet-ppawar-numerology.apk \
+            --title "Test build ${{ github.run_number }}" \
+            --notes "Install amiet-ppawar-numerology.apk on an Android phone to test."
+
+      - name: Keep the APK with the run as well
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: numerology-app-apk
+          path: amiet-ppawar-numerology.apk
